@@ -10,6 +10,7 @@ RAM="8G"
 CPUS="4"
 NETWORK="bridge"
 BRIDGE="br0"
+TAP=""
 REMOTE_ACCESS=0
 
 usage() {
@@ -22,6 +23,7 @@ Options:
       --share-dir PATH Host folder mapped as S: (default: ~/VMShare)
       --network MODE   bridge (LAN DHCP, default) or user (private NAT)
       --bridge NAME    Host bridge for --network bridge (default: br0)
+      --tap NAME       TAP device for --network bridge (default: BRIDGE-tap)
       --remote-access  Mount a CD containing enable-remote.ps1
   -h, --help           Show this help
 
@@ -64,6 +66,11 @@ while (($#)); do
       BRIDGE=$2
       shift 2
       ;;
+    --tap)
+      (($# >= 2)) || die "$1 requires a value"
+      TAP=$2
+      shift 2
+      ;;
     --remote-access)
       REMOTE_ACCESS=1
       shift
@@ -86,6 +93,8 @@ done
 [[ "$RAM" =~ ^[1-9][0-9]*([MmGg])?$ ]] || die "RAM must look like 8G or 4096M"
 [[ "$NETWORK" == bridge || "$NETWORK" == user ]] || die "--network must be bridge or user"
 [[ "$BRIDGE" =~ ^[A-Za-z0-9_.-]+$ ]] || die "Bridge name contains unsupported characters"
+[[ -n "$TAP" ]] || TAP="${BRIDGE}-tap"
+[[ "$TAP" =~ ^[A-Za-z0-9_.-]+$ ]] || die "TAP name contains unsupported characters"
 command -v qemu-system-x86_64 >/dev/null || die "qemu-system-x86_64 is required"
 command -v remote-viewer >/dev/null || die "remote-viewer is required (install the virt-viewer package for dynamic resolution)"
 
@@ -141,7 +150,7 @@ fi
 mkdir -p "$SHARE_DIR"
 if [[ "$NETWORK" == bridge ]]; then
   [[ -d "/sys/class/net/$BRIDGE" ]] || die "Bridge $BRIDGE does not exist. Create it once with: sudo ./setup-lan-bridge.sh --bridge $BRIDGE"
-  [[ -e /sys/class/net/winvm0 ]] || die "TAP winvm0 does not exist. Run: sudo ./setup-lan-bridge.sh --bridge $BRIDGE"
+  [[ -e "/sys/class/net/$TAP" ]] || die "TAP $TAP does not exist. Run: sudo ./setup-lan-bridge.sh --bridge $BRIDGE --tap $TAP"
 fi
 if ((REMOTE_ACCESS)); then
   [[ "$OS_TYPE" != xp ]] || die "--remote-access supports Windows 10/11 only"
@@ -191,7 +200,7 @@ fi
 
 if [[ "$NETWORK" == bridge ]]; then
   QEMU_ARGS+=(
-    -netdev tap,id=lan0,ifname=winvm0,script=no,downscript=no
+    -netdev "tap,id=lan0,ifname=$TAP,script=no,downscript=no"
   )
   [[ "$OS_TYPE" == xp ]] && QEMU_ARGS+=( -device rtl8139,netdev=lan0 ) || QEMU_ARGS+=( -device e1000e,netdev=lan0 )
   # Keep the existing SMB share reachable at 10.0.2.4 while the first NIC

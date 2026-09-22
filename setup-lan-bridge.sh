@@ -5,15 +5,16 @@ set -euo pipefail
 
 BRIDGE=br0
 UPLINK=""
-TAP=winvm0
+TAP=""
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./setup-lan-bridge.sh [--bridge NAME] [--uplink IFACE]
+Usage: sudo ./setup-lan-bridge.sh [--bridge NAME] [--uplink IFACE] [--tap NAME]
 
 Creates a persistent NetworkManager bridge and permits QEMU's bridge helper to
 attach guests. With no options, the uplink is inferred from the default route
-and the bridge name is br0. The host may briefly renew its DHCP lease while the
+and the bridge name is br0. The TAP name defaults to BRIDGE-tap. The host may
+briefly renew its DHCP lease while the
 bridge is activated. The previous NetworkManager connection is retained and
 can be restored with: nmcli connection up "Wired connection 1"
 EOF
@@ -25,6 +26,7 @@ while (($#)); do
   case "$1" in
     --bridge) (($# >= 2)) || die "$1 requires a value"; BRIDGE=$2; shift 2 ;;
     --uplink) (($# >= 2)) || die "$1 requires a value"; UPLINK=$2; shift 2 ;;
+    --tap) (($# >= 2)) || die "$1 requires a value"; TAP=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
@@ -33,6 +35,7 @@ done
 [[ $EUID -eq 0 ]] || die 'Run this helper with sudo.'
 command -v nmcli >/dev/null || die 'NetworkManager (nmcli) is required.'
 [[ "$BRIDGE" =~ ^[A-Za-z0-9_.-]+$ ]] || die 'Bridge name contains unsupported characters.'
+[[ -n "$TAP" ]] || TAP="${BRIDGE}-tap"
 [[ "$TAP" =~ ^[A-Za-z0-9_.-]+$ ]] || die 'TAP name contains unsupported characters.'
 TAP_OWNER=${SUDO_USER:-}
 [[ -n "$TAP_OWNER" ]] || die 'Run this helper through sudo from the user who starts the VM.'

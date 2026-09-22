@@ -21,6 +21,7 @@ CPUS="4"
 DISK_SIZE="80G"
 NETWORK="bridge"
 BRIDGE="br0"
+TAP=""
 OS_TYPE="auto"
 USERNAME="gumby"
 PASSWORD="gumby"
@@ -45,6 +46,7 @@ Options:
       --share-dir PATH Host folder mapped as S: (default: ~/VMShare)
       --network MODE   bridge (LAN DHCP, default) or user (private NAT)
       --bridge NAME    Host bridge for --network bridge (default: br0)
+      --tap NAME       TAP device for --network bridge (default: BRIDGE-tap)
       --product-key KEY Override the default XP product key
       --interactive     Do not attach an unattended-install answer disk
   -h, --help           Show this help
@@ -115,6 +117,11 @@ while (($#)); do
       BRIDGE=$2
       shift 2
       ;;
+    --tap)
+      (($# >= 2)) || die "$1 requires a value"
+      TAP=$2
+      shift 2
+      ;;
     --product-key)
       (($# >= 2)) || die "$1 requires a value"
       PRODUCT_KEY=$2
@@ -145,6 +152,8 @@ done
 [[ "$USERNAME" =~ ^[A-Za-z0-9._-]{1,20}$ ]] || die "Username may contain only letters, digits, ., _, and -"
 [[ "$NETWORK" == bridge || "$NETWORK" == user ]] || die "--network must be bridge or user"
 [[ "$BRIDGE" =~ ^[A-Za-z0-9_.-]+$ ]] || die "Bridge name contains unsupported characters"
+[[ -n "$TAP" ]] || TAP="${BRIDGE}-tap"
+[[ "$TAP" =~ ^[A-Za-z0-9_.-]+$ ]] || die "TAP name contains unsupported characters"
 
 command -v qemu-system-x86_64 >/dev/null || die "qemu-system-x86_64 is required"
 command -v qemu-img >/dev/null || die "qemu-img is required"
@@ -193,7 +202,7 @@ QXL_DRIVER_DIR="$VM_ROOT/guest-tools/qxldod-w10-amd64"
 SHARE_DIR_FILE="$VM_DIR/share-dir"
 if [[ "$NETWORK" == bridge ]]; then
   [[ -d "/sys/class/net/$BRIDGE" ]] || die "Bridge $BRIDGE does not exist. Create it once with: sudo ./setup-lan-bridge.sh --bridge $BRIDGE"
-  [[ -e /sys/class/net/winvm0 ]] || die "TAP winvm0 does not exist. Run: sudo ./setup-lan-bridge.sh --bridge $BRIDGE"
+  [[ -e "/sys/class/net/$TAP" ]] || die "TAP $TAP does not exist. Run: sudo ./setup-lan-bridge.sh --bridge $BRIDGE --tap $TAP"
 fi
 mkdir -p "$VM_ROOT" "$SHARE_DIR"
 
@@ -440,7 +449,7 @@ else
 fi
 
 if [[ "$NETWORK" == bridge ]]; then
-  QEMU_ARGS+=( -netdev tap,id=lan0,ifname=winvm0,script=no,downscript=no )
+  QEMU_ARGS+=( -netdev "tap,id=lan0,ifname=$TAP,script=no,downscript=no" )
   [[ "$OS_TYPE" == xp ]] && QEMU_ARGS+=( -device rtl8139,netdev=lan0 ) || QEMU_ARGS+=( -device e1000e,netdev=lan0 )
   [[ "$OS_TYPE" == xp ]] || QEMU_ARGS+=( -netdev "user,id=share0,smb=$SHARE_DIR" -device e1000e,netdev=share0 )
 else

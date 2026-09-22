@@ -58,10 +58,12 @@ bridge once before creating or starting a bridged VM (this briefly renews the
 host network lease but retains the original NetworkManager profile):
 
 ```bash
-sudo ./setup-lan-bridge.sh --uplink enp9s0
+sudo ./setup-lan-bridge.sh
 ```
 
-This creates `br0` and the persistent, user-owned `winvm0` TAP interface. The
+This auto-detects the current physical uplink and creates `br0` plus the
+persistent, user-owned `br0-tap` interface. Use `--bridge`, `--uplink`, or
+`--tap` to override those defaults. The
 launcher verifies both before it starts QEMU, so it cannot create a partially
 configured VM disk when bridge setup is missing. The guest's LAN interface is
 primary and receives its own DHCP lease; find it in Windows with `ipconfig`.
