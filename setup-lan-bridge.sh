@@ -41,6 +41,11 @@ id -u "$TAP_OWNER" >/dev/null || die "Cannot identify TAP owner: $TAP_OWNER"
 if [[ -z "$UPLINK" ]]; then
   UPLINK=$(ip route show default | awk '/default/ {print $5; exit}')
 fi
+if [[ "$UPLINK" == "$BRIDGE" ]]; then
+  # Once the bridge is active, the default route belongs to br0. Re-running
+  # this helper must use its physical port rather than rejecting that route.
+  UPLINK=$(ip -o link show master "$BRIDGE" | awk -F': ' 'NR == 1 { sub(/@.*/, "", $2); print $2 }')
+fi
 [[ -n "$UPLINK" ]] || die 'Could not identify an uplink; pass --uplink IFACE.'
 [[ -d "/sys/class/net/$UPLINK" ]] || die "No such network interface: $UPLINK"
 [[ "$UPLINK" != "$BRIDGE" ]] || die 'The uplink and bridge must differ.'
