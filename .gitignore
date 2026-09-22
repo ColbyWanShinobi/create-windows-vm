@@ -1,1 +1,2 @@
-.windows-vm
+# Per-machine VM disks, firmware state, generated provisioning media, and logs.
+.windows-vm/

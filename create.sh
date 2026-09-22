@@ -9,14 +9,18 @@ VM_DIR=""
 DISK_IMAGE=""
 PID_FILE=""
 SHARE_DIR="$HOME/VMShare"
+SHARE_DIR_EXPLICIT=0
 ANSWER_DISK=""
 UEFI_VARS=""
 SPICE_GUEST_TOOLS=""
 SPICE_GUEST_TOOLS_URL="https://www.spice-space.org/download/windows/spice-guest-tools/spice-guest-tools-latest.exe"
+QXL_DRIVER_DIR=""
 
 RAM="8G"
 CPUS="4"
 DISK_SIZE="80G"
+NETWORK="bridge"
+BRIDGE="br0"
 OS_TYPE="auto"
 USERNAME="gumby"
 PASSWORD="gumby"
@@ -38,6 +42,9 @@ Options:
   -o, --os TYPE        auto, xp, win10, or win11 (default: auto from ISO name)
   -u, --username NAME  Local administrator name (default: gumby)
   -p, --password TEXT  Local administrator password (default: gumby)
+      --share-dir PATH Host folder mapped as S: (default: ~/VMShare)
+      --network MODE   bridge (LAN DHCP, default) or user (private NAT)
+      --bridge NAME    Host bridge for --network bridge (default: br0)
       --product-key KEY Override the default XP product key
       --interactive     Do not attach an unattended-install answer disk
   -h, --help           Show this help
@@ -48,7 +55,8 @@ Examples:
 
 Each OS keeps its own disk and settings under .windows-vm/{xp,win10,win11}, so
 the three VMs can run concurrently. The host folder ~/VMShare is created when
-needed and is mapped as S: in Windows 10/11.
+needed and is mapped as S: in Windows 10/11. Use --share-dir to select a
+different host folder.
 EOF
 }
 
@@ -91,6 +99,22 @@ while (($#)); do
       PASSWORD=$2
       shift 2
       ;;
+    --share-dir)
+      (($# >= 2)) || die "$1 requires a value"
+      SHARE_DIR=$2
+      SHARE_DIR_EXPLICIT=1
+      shift 2
+      ;;
+    --network)
+      (($# >= 2)) || die "$1 requires a value"
+      NETWORK=${2,,}
+      shift 2
+      ;;
+    --bridge)
+      (($# >= 2)) || die "$1 requires a value"
+      BRIDGE=$2
+      shift 2
+      ;;
     --product-key)
       (($# >= 2)) || die "$1 requires a value"
       PRODUCT_KEY=$2
@@ -119,9 +143,12 @@ done
 [[ "$RAM" =~ ^[1-9][0-9]*([MmGg])?$ ]] || die "RAM must look like 8G or 4096M"
 [[ "$DISK_SIZE" =~ ^[1-9][0-9]*([MmGgTt])?$ ]] || die "Disk size must look like 80G"
 [[ "$USERNAME" =~ ^[A-Za-z0-9._-]{1,20}$ ]] || die "Username may contain only letters, digits, ., _, and -"
+[[ "$NETWORK" == bridge || "$NETWORK" == user ]] || die "--network must be bridge or user"
+[[ "$BRIDGE" =~ ^[A-Za-z0-9_.-]+$ ]] || die "Bridge name contains unsupported characters"
 
 command -v qemu-system-x86_64 >/dev/null || die "qemu-system-x86_64 is required"
 command -v qemu-img >/dev/null || die "qemu-img is required"
+command -v remote-viewer >/dev/null || die "remote-viewer is required (install the virt-viewer package for dynamic resolution)"
 if ((UNATTENDED)); then
   command -v mkfs.vfat >/dev/null || die "mkfs.vfat is required for unattended setup"
   command -v mcopy >/dev/null || die "mcopy (mtools) is required for unattended setup"
@@ -157,10 +184,17 @@ fi
 VM_DIR="$VM_ROOT/$OS_TYPE"
 DISK_IMAGE="$VM_DIR/windows.qcow2"
 PID_FILE="$VM_DIR/qemu.pid"
+SPICE_SOCKET="$VM_DIR/spice.sock"
 ANSWER_DISK="$VM_DIR/unattended.img"
 PROVISION_ISO="$VM_DIR/provisioning.iso"
 UEFI_VARS="$VM_DIR/OVMF_VARS.fd"
 SPICE_GUEST_TOOLS="$VM_ROOT/guest-tools/spice-guest-tools-latest.exe"
+QXL_DRIVER_DIR="$VM_ROOT/guest-tools/qxldod-w10-amd64"
+SHARE_DIR_FILE="$VM_DIR/share-dir"
+if [[ "$NETWORK" == bridge ]]; then
+  [[ -d "/sys/class/net/$BRIDGE" ]] || die "Bridge $BRIDGE does not exist. Create it once with: sudo ./setup-lan-bridge.sh --bridge $BRIDGE"
+  [[ -e /sys/class/net/winvm0 ]] || die "TAP winvm0 does not exist. Run: sudo ./setup-lan-bridge.sh --bridge $BRIDGE"
+fi
 mkdir -p "$VM_ROOT" "$SHARE_DIR"
 
 # Preserve VMs made by the earlier single-VM version of this script. That
@@ -176,6 +210,16 @@ if [[ -f "$VM_ROOT/windows.qcow2" && ! -e "$DISK_IMAGE" ]]; then
   done
 fi
 mkdir -p "$VM_DIR"
+
+# A custom share directory must survive later starts via run.sh.  Preserve an
+# existing selection unless this invocation explicitly supplies --share-dir.
+if [[ -s "$SHARE_DIR_FILE" && $SHARE_DIR_EXPLICIT -eq 0 ]]; then
+  IFS= read -r SHARE_DIR < "$SHARE_DIR_FILE"
+fi
+mkdir -p "$SHARE_DIR"
+if [[ ! -s "$SHARE_DIR_FILE" || $SHARE_DIR_EXPLICIT -eq 1 ]]; then
+  printf '%s\n' "$SHARE_DIR" > "$SHARE_DIR_FILE"
+fi
 
 xml_escape() {
   local value=$1
@@ -253,7 +297,7 @@ EOF
       <OOBE><HideEULAPage>true</HideEULAPage><HideOnlineAccountScreens>true</HideOnlineAccountScreens><ProtectYourPC>3</ProtectYourPC></OOBE>
       <UserAccounts><LocalAccounts><LocalAccount wcm:action="add"><Name>$user_xml</Name><Group>Administrators</Group><Password><Value>$password_xml</Value><PlainText>true</PlainText></Password></LocalAccount></LocalAccounts></UserAccounts>
       <AutoLogon><Enabled>true</Enabled><Username>$user_xml</Username><LogonCount>1</LogonCount><Password><Value>$password_xml</Value><PlainText>true</PlainText></Password></AutoLogon>
-      <FirstLogonCommands><SynchronousCommand wcm:action="add"><Order>1</Order><CommandLine>cmd /c for %D in (D E F G H I J K L M N O P Q R T U V W X Y Z) do @if exist "%D:\provision.cmd" call "%D:\provision.cmd"</CommandLine></SynchronousCommand><SynchronousCommand wcm:action="add"><Order>2</Order><CommandLine>cmd /c net use S: \\\\10.0.2.4\\qemu /persistent:yes</CommandLine></SynchronousCommand></FirstLogonCommands>
+      <FirstLogonCommands><SynchronousCommand wcm:action="add"><Order>1</Order><CommandLine>cmd /c net use S: \\\\10.0.2.4\\qemu /persistent:yes</CommandLine></SynchronousCommand></FirstLogonCommands>
       <TimeZone>UTC</TimeZone>
     </component>
   </settings>
@@ -261,12 +305,25 @@ EOF
 EOF
     cat > "$provision_file" <<'EOF'
 @echo off
+setlocal
+set "LOG=%SystemDrive%\spice-guest-tools-install.log"
+echo Installing SPICE Guest Tools > "%LOG%"
 start "" /wait "%~dp0spice-guest-tools-latest.exe" /S
+echo SPICE Guest Tools exit code: %errorlevel% >> "%LOG%"
+echo Installing the Red Hat QXL display driver >> "%LOG%"
+pnputil /add-driver "%~dp0qxl-driver\qxldod.inf" /install >> "%LOG%" 2>&1
+echo QXL driver install exit code: %errorlevel% >> "%LOG%"
+echo Enabling WinRM and OpenSSH Server >> "%LOG%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0enable-remote.ps1" >> "%LOG%" 2>&1
+echo Remote access setup exit code: %errorlevel% >> "%LOG%"
 EOF
     mcopy -o -i "$ANSWER_DISK" "$answer_file" ::/Autounattend.xml
     provision_dir=$(mktemp -d "$VM_DIR/provisioning.XXXXXX")
     cp -- "$provision_file" "$provision_dir/provision.cmd"
+    cp -- "$SCRIPT_DIR/enable-remote.ps1" "$provision_dir/enable-remote.ps1"
     cp -- "$SPICE_GUEST_TOOLS" "$provision_dir/spice-guest-tools-latest.exe"
+    mkdir -p "$provision_dir/qxl-driver"
+    cp -- "$QXL_DRIVER_DIR"/qxldod.{cat,inf,sys} "$provision_dir/qxl-driver/"
     provision_tmp=$(mktemp "$VM_DIR/provisioning.XXXXXX.iso")
     xorriso -overwrite on -as mkisofs -quiet -V PROVISION -o "$provision_tmp" "$provision_dir"
     mv -f -- "$provision_tmp" "$PROVISION_ISO"
@@ -289,6 +346,29 @@ prepare_spice_guest_tools() {
   mv "$SPICE_GUEST_TOOLS.tmp" "$SPICE_GUEST_TOOLS"
 }
 
+prepare_qxl_driver() {
+  [[ "$OS_TYPE" == win10 || "$OS_TYPE" == win11 ]] || return
+  if [[ -s "$QXL_DRIVER_DIR/qxldod.inf" && -s "$QXL_DRIVER_DIR/qxldod.sys" && -s "$QXL_DRIVER_DIR/qxldod.cat" ]]; then
+    return
+  fi
+  command -v 7z >/dev/null || die "7z is required to extract the QXL display driver from SPICE Guest Tools"
+  local qxl_tmp
+  qxl_tmp=$(mktemp -d "$VM_ROOT/guest-tools/qxldod.XXXXXX")
+  if ! 7z e -y -o"$qxl_tmp" "$SPICE_GUEST_TOOLS" \
+    'drivers/qxldod/w10/amd64/qxldod.inf' \
+    'drivers/qxldod/w10/amd64/qxldod.sys' \
+    'drivers/qxldod/w10/amd64/qxldod.cat' >/dev/null; then
+    rm -rf -- "$qxl_tmp"
+    die "Could not extract the QXL display driver from SPICE Guest Tools"
+  fi
+  [[ -s "$qxl_tmp/qxldod.inf" && -s "$qxl_tmp/qxldod.sys" && -s "$qxl_tmp/qxldod.cat" ]] || {
+    rm -rf -- "$qxl_tmp"
+    die "SPICE Guest Tools does not contain the Windows QXL display driver"
+  }
+  rm -rf -- "$QXL_DRIVER_DIR"
+  mv -- "$qxl_tmp" "$QXL_DRIVER_DIR"
+}
+
 if [[ -e "$PID_FILE" ]]; then
   old_pid=$(<"$PID_FILE")
   if [[ "$old_pid" =~ ^[0-9]+$ ]] && kill -0 "$old_pid" 2>/dev/null; then
@@ -296,6 +376,7 @@ if [[ -e "$PID_FILE" ]]; then
   fi
   rm -f "$PID_FILE"
 fi
+rm -f -- "$SPICE_SOCKET"
 
 if [[ ! -e "$DISK_IMAGE" ]]; then
   qemu-img create -f qcow2 "$DISK_IMAGE" "$DISK_SIZE"
@@ -308,6 +389,7 @@ if ((UNATTENDED)); then
     die "XP unattended passwords cannot contain whitespace"
   fi
   prepare_spice_guest_tools
+  prepare_qxl_driver
   create_answer_disk
 fi
 
@@ -320,8 +402,8 @@ QEMU_ARGS=(
   -boot order=dc
   -drive "file=$DISK_IMAGE,format=qcow2,if=ide"
   -drive "file=$ISO,media=cdrom,readonly=on"
-  -display gtk,zoom-to-fit=on,show-cursor=on
-  -spice port=0,disable-ticketing=on,disable-copy-paste=off
+  -display none
+  -spice "unix=on,addr=$SPICE_SOCKET,disable-ticketing=on,disable-copy-paste=off"
   -device virtio-serial-pci
   -chardev spicevmc,id=vdagent,name=vdagent
   -device virtserialport,chardev=vdagent,name=com.redhat.spice.0
@@ -334,16 +416,15 @@ if [[ "$OS_TYPE" == xp ]]; then
     -machine pc,accel=kvm,kernel-irqchip=split
     -usb
     -device usb-tablet
-    -nic user,model=rtl8139
   )
 else
   OVMF_CODE=""
-  for candidate in /usr/share/edk2/x64/OVMF_CODE.4m.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF_CODE_4M.fd; do
+  for candidate in /usr/share/edk2/x64/OVMF_CODE.4m.fd /usr/share/OVMF/OVMF_CODE.fd; do
     [[ -r "$candidate" ]] && OVMF_CODE=$candidate && break
   done
   [[ -n "$OVMF_CODE" ]] || die "OVMF firmware is required for Windows 10/11 (install an edk2-ovmf or ovmf package)"
   if [[ ! -f "$UEFI_VARS" ]]; then
-    for candidate in /usr/share/edk2/x64/OVMF_VARS.4m.fd /usr/share/OVMF/OVMF_VARS.fd /usr/share/OVMF/OVMF_VARS_4M.fd; do
+    for candidate in /usr/share/edk2/x64/OVMF_VARS.4m.fd /usr/share/OVMF/OVMF_VARS.fd; do
       [[ -r "$candidate" ]] && cp "$candidate" "$UEFI_VARS" && break
     done
   fi
@@ -353,10 +434,17 @@ else
     -vga qxl
     -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE"
     -drive "if=pflash,format=raw,file=$UEFI_VARS"
-    -nic "user,model=e1000e,smb=$SHARE_DIR"
     -device qemu-xhci,id=xhci
     -device usb-tablet,bus=xhci.0
   )
+fi
+
+if [[ "$NETWORK" == bridge ]]; then
+  QEMU_ARGS+=( -netdev tap,id=lan0,ifname=winvm0,script=no,downscript=no )
+  [[ "$OS_TYPE" == xp ]] && QEMU_ARGS+=( -device rtl8139,netdev=lan0 ) || QEMU_ARGS+=( -device e1000e,netdev=lan0 )
+  [[ "$OS_TYPE" == xp ]] || QEMU_ARGS+=( -netdev "user,id=share0,smb=$SHARE_DIR" -device e1000e,netdev=share0 )
+else
+  [[ "$OS_TYPE" == xp ]] && QEMU_ARGS+=( -nic user,model=rtl8139 ) || QEMU_ARGS+=( -nic "user,model=e1000e,smb=$SHARE_DIR" )
 fi
 
 if ((UNATTENDED)); then
@@ -365,11 +453,20 @@ if ((UNATTENDED)); then
 fi
 
 cleanup() {
+  if [[ -n ${qemu_pid:-} ]] && kill -0 "$qemu_pid" 2>/dev/null; then
+    kill "$qemu_pid" 2>/dev/null || true
+    wait "$qemu_pid" 2>/dev/null || true
+  fi
+  rm -f -- "$SPICE_SOCKET"
   rm -f "$PID_FILE"
 }
 trap cleanup EXIT INT TERM
 
-printf 'Starting Windows VM. Host share: %s\n' "$SHARE_DIR"
+printf 'Starting Windows VM. Network: %s; host share: %s\n' "$NETWORK" "$SHARE_DIR"
+if [[ "$NETWORK" == bridge ]]; then
+  printf 'The guest will request its own DHCP address from the LAN through %s.\n' "$BRIDGE"
+fi
+printf 'Resize the Remote Viewer window to change the Windows display resolution.\n'
 printf 'Windows 10/11 setup installs SPICE Guest Tools for clipboard sharing and maps the host share as S:.\n'
 if ((UNATTENDED)); then
   printf 'Unattended %s setup is enabled; local administrator: %s; password: %s\n' "$OS_TYPE" "$USERNAME" "$PASSWORD"
@@ -379,4 +476,15 @@ qemu-system-x86_64 "${QEMU_ARGS[@]}" &
 
 qemu_pid=$!
 printf '%s\n' "$qemu_pid" > "$PID_FILE"
-wait "$qemu_pid"
+
+for _ in {1..100}; do
+  [[ -S "$SPICE_SOCKET" ]] && break
+  if ! kill -0 "$qemu_pid" 2>/dev/null; then
+    wait "$qemu_pid"
+    die "QEMU exited before its SPICE display became available"
+  fi
+  sleep 0.1
+done
+[[ -S "$SPICE_SOCKET" ]] || die "Timed out waiting for QEMU's SPICE display"
+
+remote-viewer --title "Windows $OS_TYPE" --auto-resize=always "spice+unix://$SPICE_SOCKET"
