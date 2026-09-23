@@ -55,6 +55,8 @@ fi
 
 BRIDGE_CONNECTION="Windows VM bridge ($BRIDGE)"
 UPLINK_CONNECTION="Windows VM uplink ($UPLINK -> $BRIDGE)"
+STATE_DIR=/etc/qemu
+STATE_FILE="$STATE_DIR/windows-vm-bridge-$BRIDGE.env"
 
 if ! nmcli -t -f NAME,TYPE connection show | awk -F: -v name="$BRIDGE_CONNECTION" '$1 == name && $2 == "bridge" { found=1 } END { exit !found }'; then
   nmcli connection add type bridge ifname "$BRIDGE" con-name "$BRIDGE_CONNECTION" \
@@ -64,10 +66,10 @@ if ! nmcli connection show "$UPLINK_CONNECTION" >/dev/null 2>&1; then
   nmcli connection add type ethernet ifname "$UPLINK" con-name "$UPLINK_CONNECTION" master "$BRIDGE"
 fi
 
-install -d -m 755 /etc/qemu
-touch /etc/qemu/bridge.conf
-grep -Fqx "allow $BRIDGE" /etc/qemu/bridge.conf || printf 'allow %s\n' "$BRIDGE" >> /etc/qemu/bridge.conf
-chmod 644 /etc/qemu/bridge.conf
+install -d -m 755 "$STATE_DIR"
+touch "$STATE_DIR/bridge.conf"
+grep -Fqx "allow $BRIDGE" "$STATE_DIR/bridge.conf" || printf 'allow %s\n' "$BRIDGE" >> "$STATE_DIR/bridge.conf"
+chmod 644 "$STATE_DIR/bridge.conf"
 
 printf 'Moving %s onto %s. The host network will reconnect briefly...\n' "$UPLINK" "$BRIDGE"
 # Explicitly activate the slave profile.  Merely activating the bridge leaves
@@ -75,6 +77,15 @@ printf 'Moving %s onto %s. The host network will reconnect briefly...\n' "$UPLIN
 # br0 no uplink and prevents both host and guest DHCP.
 active_connection=$(nmcli -g GENERAL.CONNECTION device show "$UPLINK" 2>/dev/null || true)
 if [[ -n "$active_connection" && "$active_connection" != "$UPLINK_CONNECTION" ]]; then
+  # This is the exact profile the paired teardown script must restore.  Quote
+  # values so that connection names containing spaces are handled safely.
+  umask 077
+  {
+    printf 'BRIDGE=%q\n' "$BRIDGE"
+    printf 'UPLINK=%q\n' "$UPLINK"
+    printf 'TAP=%q\n' "$TAP"
+    printf 'RESTORE_CONNECTION=%q\n' "$active_connection"
+  } > "$STATE_FILE"
   nmcli connection down "$active_connection" || true
 fi
 nmcli connection up "$UPLINK_CONNECTION" ifname "$UPLINK"
@@ -89,3 +100,4 @@ fi
 ip link set dev "$TAP" master "$BRIDGE"
 ip link set dev "$TAP" up
 printf 'Bridge %s and TAP %s are active. Start the VM with ./run.sh --network bridge --bridge %s\n' "$BRIDGE" "$TAP" "$BRIDGE"
+printf 'To restore the host network before using Proton VPN: sudo ./teardown-lan-bridge.sh --bridge %s\n' "$BRIDGE"

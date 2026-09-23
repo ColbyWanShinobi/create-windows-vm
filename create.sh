@@ -19,7 +19,7 @@ QXL_DRIVER_DIR=""
 RAM="8G"
 CPUS="4"
 DISK_SIZE="80G"
-NETWORK="bridge"
+NETWORK="user"
 BRIDGE="br0"
 TAP=""
 OS_TYPE="auto"
@@ -44,7 +44,7 @@ Options:
   -u, --username NAME  Local administrator name (default: gumby)
   -p, --password TEXT  Local administrator password (default: gumby)
       --share-dir PATH Host folder mapped as S: (default: ~/VMShare)
-      --network MODE   bridge (LAN DHCP, default) or user (private NAT)
+      --network MODE   bridge (LAN DHCP) or user (private NAT, default)
       --bridge NAME    Host bridge for --network bridge (default: br0)
       --tap NAME       TAP device for --network bridge (default: BRIDGE-tap)
       --product-key KEY Override the default XP product key

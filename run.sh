@@ -8,7 +8,7 @@ SHARE_DIR="$HOME/VMShare"
 SHARE_DIR_EXPLICIT=0
 RAM="8G"
 CPUS="4"
-NETWORK="bridge"
+NETWORK="user"
 BRIDGE="br0"
 TAP=""
 REMOTE_ACCESS=0
@@ -21,7 +21,7 @@ Options:
   -m, --ram SIZE       Guest memory (default: 8G)
   -c, --cpus COUNT     Guest CPU threads (default: 4)
       --share-dir PATH Host folder mapped as S: (default: ~/VMShare)
-      --network MODE   bridge (LAN DHCP, default) or user (private NAT)
+      --network MODE   bridge (LAN DHCP) or user (private NAT, default)
       --bridge NAME    Host bridge for --network bridge (default: br0)
       --tap NAME       TAP device for --network bridge (default: BRIDGE-tap)
       --remote-access  Mount a CD containing enable-remote.ps1
